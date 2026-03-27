@@ -8,7 +8,11 @@
       "Bash(powershell -Command \"\n$WshShell = New-Object -comObject WScript.Shell\n$Shortcut = $WshShell.CreateShortcut\\('C:\\\\Users\\\\dilik\\\\Desktop\\\\Email Sync.lnk'\\)\n$Shortcut.TargetPath = 'C:\\\\Users\\\\dilik\\\\OneDrive\\\\Desktop\\\\Projects\\\\Claude setup\\\\email agent\\\\OutlookAgent\\\\run.bat'\n$Shortcut.WorkingDirectory = 'C:\\\\Users\\\\dilik\\\\OneDrive\\\\Desktop\\\\Projects\\\\Claude setup\\\\email agent\\\\OutlookAgent'\n$Shortcut.IconLocation = 'C:\\\\Windows\\\\System32\\\\shell32.dll,14'\n$Shortcut.Description = 'Fetch emails and sync tasks to Notion'\n$Shortcut.Save\\(\\)\nWrite-Host 'Done'\n\")",
       "Bash(powershell -File - << 'EOF'\n$WshShell = New-Object -comObject WScript.Shell\n$Shortcut = $WshShell.CreateShortcut\\(\"C:\\\\Users\\\\dilik\\\\OneDrive\\\\Desktop\\\\Email Sync.lnk\"\\)\n$Shortcut.TargetPath = \"C:\\\\Users\\\\dilik\\\\OneDrive\\\\Desktop\\\\Projects\\\\Claude setup\\\\email agent\\\\OutlookAgent\\\\run.bat\"\n$Shortcut.WorkingDirectory = \"C:\\\\Users\\\\dilik\\\\OneDrive\\\\Desktop\\\\Projects\\\\Claude setup\\\\email agent\\\\OutlookAgent\"\n$Shortcut.IconLocation = \"C:\\\\Windows\\\\System32\\\\shell32.dll,14\"\n$Shortcut.Description = \"Fetch emails and sync tasks to Notion\"\n$Shortcut.Save\\(\\)\nWrite-Host \"Shortcut created\"\nEOF)",
       "Bash(curl:*)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\(''''clone_url'''', d.get\\(''''message'''',''''''''\\)\\)\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\(''''clone_url'''', d.get\\(''''message'''',''''''''\\)\\)\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(w[''''name''''], w[''''id''''], w[''''state'''']\\) for w in d.get\\(''''workflows'''',[]\\)] or print\\(''''No workflows found''''\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d\\) if isinstance\\(d,dict\\) else [print\\(f[''''name'''']\\) for f in d]\")",
+      "Bash(cd /tmp)",
+      "Bash(unzip -o run_logs.zip -d run_logs)"
     ]
   }
 }

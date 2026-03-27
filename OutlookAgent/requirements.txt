@@ -2,3 +2,4 @@ anthropic
 python-dotenv
 schedule
 requests
+python-telegram-bot==21.3
