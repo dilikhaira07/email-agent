@@ -35,29 +35,39 @@ def send_message(text: str):
 
 
 def build_summary(tasks: list[dict], meetings: list[dict]) -> str:
+    from datetime import datetime
     urgent   = [t for t in tasks if t.get("urgent")]
     thisweek = [t for t in tasks if not t.get("urgent")]
+    today    = datetime.now().strftime("%a, %b %d %Y")
 
-    lines = ["<b>Email Sync Complete</b>"]
-    lines.append(f"{len(tasks)} task(s) | {len(meetings)} meeting(s)\n")
+    lines = [
+        f"📬 <b>Daily Email Brief</b>",
+        f"<i>{today}</i>",
+        "─────────────────────",
+    ]
 
     if urgent:
-        lines.append("<b>URGENT</b>")
+        lines.append(f"\n🔴 <b>URGENT  ({len(urgent)})</b>")
         for t in urgent:
-            lines.append(f"  - {t['title']}")
+            due = f"  <i>Due: {t['due_date'][:10]}</i>" if t.get("due_date") else ""
+            lines.append(f"• {t['title']}{due}")
 
     if thisweek:
-        lines.append("\n<b>This Week</b>")
-        for t in thisweek[:5]:  # cap at 5 to keep message short
-            lines.append(f"  - {t['title']}")
-        if len(thisweek) > 5:
-            lines.append(f"  ...and {len(thisweek) - 5} more")
+        lines.append(f"\n🟡 <b>THIS WEEK  ({len(thisweek)})</b>")
+        for t in thisweek[:6]:
+            lines.append(f"• {t['title']}")
+        if len(thisweek) > 6:
+            lines.append(f"  <i>+{len(thisweek) - 6} more in Notion</i>")
 
     if meetings:
-        lines.append("\n<b>Meetings</b>")
+        lines.append(f"\n📅 <b>MEETINGS  ({len(meetings)})</b>")
         for m in meetings:
-            date = f" ({m['date']})" if m.get("date") else ""
-            lines.append(f"  - {m['title']}{date}")
+            date = f" — {m['date']}" if m.get("date") else ""
+            link = f"\n  🔗 <a href=\"{m['link']}\">Join</a>" if m.get("link") else ""
+            lines.append(f"• {m['title']}{date}{link}")
+
+    lines.append("\n─────────────────────")
+    lines.append("✅ Notion synced")
 
     return "\n".join(lines)
 
