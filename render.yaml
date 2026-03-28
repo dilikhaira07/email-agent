@@ -3,12 +3,62 @@ services:
     name: telegram-claude-bot
     runtime: python
     buildCommand: pip install -r OutlookAgent/requirements.txt
-    startCommand: python OutlookAgent/telegram_bot.py
+    startCommand: python -m OutlookAgent.telegram_bot
     plan: free
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+  - type: cron
+    name: email-sync
+    runtime: python
+    buildCommand: pip install -r OutlookAgent/requirements.txt
+    startCommand: python -m OutlookAgent.scheduled_sync
+    schedule: 45 * * * *
+    plan: starter
+    envVars:
+      - key: IMAP_SERVER
+        sync: false
+      - key: IMAP_PORT
+        sync: false
+      - key: EMAIL_ADDRESS
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: IMAP_USERNAME
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DATABASE_ID
+        sync: false
+      - key: NOTION_MEETINGS_DB_ID
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PUSH_TO_TODO
+        sync: false
+      - key: HTTP_CONNECT_TIMEOUT
+        sync: false
+      - key: HTTP_READ_TIMEOUT
+        sync: false
+      - key: HTTP_RETRY_TOTAL
+        sync: false
+      - key: SYNC_STATE_MAX_ITEMS
+        sync: false
+      - key: SYNC_STATE_PATH
+        sync: false
+      - key: LOG_LEVEL
         sync: false

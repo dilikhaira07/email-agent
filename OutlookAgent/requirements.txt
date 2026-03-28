@@ -1,6 +1,5 @@
-anthropic
-python-dotenv
-schedule
-requests
-flask
-python-telegram-bot==21.3
+openai==1.109.1
+python-dotenv==1.2.1
+schedule==1.2.2
+requests==2.32.5
+Flask==3.1.3

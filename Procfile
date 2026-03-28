@@ -1,1 +1,1 @@
-worker: python OutlookAgent/telegram_bot.py
+web: python -m OutlookAgent.telegram_bot

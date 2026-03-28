@@ -1,22 +1,16 @@
 """
 main.py
 -------
-Entry point for the Outlook AI Email Agent (IMAP version).
+Legacy console-only email triage loop.
 
-Runs on a schedule (every hour by default) and:
-  1. Fetches unread emails from the configured IMAP mailbox
-  2. Sends each email to Claude for analysis (summary, urgency, action)
-  3. Prints a formatted report to the console
+This module remains available for simple mailbox triage, but the canonical
+workflow in this repo is `python -m OutlookAgent.fetch_tasks`, which performs:
+  1. structured OpenAI extraction
+  2. Notion sync
+  3. Telegram summary delivery
 
 Usage:
-    python main.py
-
-Environment variables required (set in .env):
-    IMAP_SERVER       — e.g. mail.swd.ca
-    IMAP_PORT         — e.g. 993 (SSL)
-    EMAIL_ADDRESS     — your email address
-    EMAIL_PASSWORD    — your email password
-    ANTHROPIC_API_KEY — Anthropic Claude API key
+    python -m OutlookAgent.main
 """
 
 import os
@@ -25,8 +19,8 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 
-from outlook import fetch_emails
-from claude_agent import analyze_emails
+from .outlook import fetch_emails
+from .claude_agent import analyze_emails
 
 load_dotenv()
 
@@ -39,7 +33,7 @@ SCHEDULE_INTERVAL_MINUTES = 60
 
 def run_agent():
     """
-    Main agent loop: fetch emails, analyze them with Claude, print a report.
+    Main agent loop: fetch emails, analyze them with OpenAI, print a report.
     Errors are caught and logged so the scheduler keeps running.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -64,12 +58,12 @@ def run_agent():
         print("\n  Inbox is clear — no unread emails to process.")
         return
 
-    # Step 2: Analyze emails with Claude
-    print(f"\n[2/2] Sending emails to Claude ({len(emails)} to analyze)...")
+    # Step 2: Analyze emails with OpenAI
+    print(f"\n[2/2] Sending emails to OpenAI ({len(emails)} to analyze)...")
     try:
         analyzed = analyze_emails(emails)
     except RuntimeError as e:
-        print(f"\n[ERROR] Claude analysis failed:\n  {e}")
+        print(f"\n[ERROR] OpenAI analysis failed:\n  {e}")
         return
 
     # Step 3: Print formatted report
@@ -99,9 +93,9 @@ def run_agent():
 
 def main():
     """
-    Bootstraps the agent: runs once immediately, then schedules it on a timer.
+    Bootstraps the legacy triage loop: runs once immediately, then schedules it on a timer.
     """
-    required_vars = ["IMAP_SERVER", "IMAP_PORT", "EMAIL_ADDRESS", "EMAIL_PASSWORD", "ANTHROPIC_API_KEY"]
+    required_vars = ["IMAP_SERVER", "IMAP_PORT", "EMAIL_ADDRESS", "EMAIL_PASSWORD", "OPENAI_API_KEY"]
     missing = [v for v in required_vars if not os.getenv(v)]
 
     if missing:
@@ -111,12 +105,14 @@ def main():
         print("\nPlease fill in your .env file before running the agent.")
         return
 
-    if os.getenv("ANTHROPIC_API_KEY", "").startswith("your_"):
-        print("[ERROR] Please set your real ANTHROPIC_API_KEY in .env.")
+    if os.getenv("OPENAI_API_KEY", "").startswith("your_"):
+        print("[ERROR] Please set your real OPENAI_API_KEY in .env.")
         return
 
     server = os.getenv("IMAP_SERVER")
     account = os.getenv("EMAIL_ADDRESS")
+    print("[LEGACY] This console triage loop is retained for manual use.")
+    print("[LEGACY] Preferred workflow: python -m OutlookAgent.fetch_tasks")
     print("Outlook AI Email Agent starting...")
     print(f"IMAP server  : {server}:{os.getenv('IMAP_PORT')}")
     print(f"Mailbox      : {account}")

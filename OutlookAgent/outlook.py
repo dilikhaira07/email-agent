@@ -11,6 +11,8 @@ import email
 from email.header import decode_header
 from dotenv import load_dotenv
 
+from .email_normalize import build_preview
+
 load_dotenv()
 
 IMAP_SERVER = os.getenv("IMAP_SERVER")
@@ -48,42 +50,9 @@ def _decode_str(value) -> str:
 
 def _get_body_preview(msg, max_chars: int = 500) -> str:
     """
-    Extracts a plain-text preview from an email message object.
-    Prefers the text/plain part; falls back to text/html stripped of tags.
-
-    Args:
-        msg: An email.message.Message object.
-        max_chars (int): Maximum number of characters to return.
-
-    Returns:
-        str: Plain-text preview of the email body.
+    Extracts a readable preview from an email message object and preserves a few useful links.
     """
-    preview = ""
-
-    if msg.is_multipart():
-        # Walk all parts and grab the first plain-text section
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition", ""))
-
-            if content_type == "text/plain" and "attachment" not in disposition:
-                try:
-                    charset = part.get_content_charset() or "utf-8"
-                    preview = part.get_payload(decode=True).decode(charset, errors="replace")
-                    break
-                except Exception:
-                    continue
-    else:
-        # Single-part message
-        try:
-            charset = msg.get_content_charset() or "utf-8"
-            preview = msg.get_payload(decode=True).decode(charset, errors="replace")
-        except Exception:
-            preview = ""
-
-    # Clean up whitespace and truncate
-    preview = " ".join(preview.split())
-    return preview[:max_chars]
+    return build_preview(msg, max_chars=max_chars)
 
 
 def fetch_emails(max_emails: int = 10) -> list[dict]:

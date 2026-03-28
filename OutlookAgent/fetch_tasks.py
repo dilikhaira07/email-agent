@@ -11,10 +11,26 @@ import re
 import json
 import imaplib
 import email
+import uuid
 from email.header import decode_header
 from datetime import datetime
-import anthropic
 from dotenv import load_dotenv
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
+from .app_logging import get_logger
+from .email_normalize import build_preview
+from .sync_state import (
+    filter_new_items,
+    load_state,
+    meeting_key,
+    remember_items,
+    save_state,
+    task_key,
+)
 
 load_dotenv()
 
@@ -23,10 +39,12 @@ IMAP_PORT          = int(os.getenv("IMAP_PORT", "993"))
 EMAIL_ADDRESS      = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD     = os.getenv("EMAIL_PASSWORD")
 IMAP_USERNAME      = os.getenv("IMAP_USERNAME") or EMAIL_ADDRESS
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
+OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL       = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 PUSH_TO_TODO       = os.getenv("PUSH_TO_TODO", "true").lower() == "true"
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "Summary MD files")
+logger = get_logger("email_agent.sync")
 
 
 # ── Email fetching ─────────────────────────────────────────────────────────────
@@ -47,27 +65,11 @@ def decode_str(value) -> str:
 
 
 def get_body_preview(msg, max_chars=800) -> str:
-    preview = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain" and "attachment" not in str(part.get("Content-Disposition", "")):
-                try:
-                    charset = part.get_content_charset() or "utf-8"
-                    preview = part.get_payload(decode=True).decode(charset, errors="replace")
-                    break
-                except Exception:
-                    continue
-    else:
-        try:
-            charset = msg.get_content_charset() or "utf-8"
-            preview = msg.get_payload(decode=True).decode(charset, errors="replace")
-        except Exception:
-            pass
-    return " ".join(preview.split())[:max_chars]
+    return build_preview(msg, max_chars=max_chars)
 
 
 def fetch_last_n_emails(n=50):
-    print(f"Connecting to {IMAP_SERVER}:{IMAP_PORT} as {IMAP_USERNAME}...")
+    logger.info("Connecting to IMAP server server=%s port=%s user=%s limit=%s", IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, n)
     mail = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT)
     mail.login(IMAP_USERNAME, EMAIL_PASSWORD)
     mail.select("INBOX")
@@ -79,7 +81,7 @@ def fetch_last_n_emails(n=50):
     all_ids = data[0].split()
     recent_ids = list(reversed(all_ids[-n:]))
 
-    print(f"Found {len(all_ids)} total emails. Fetching last {len(recent_ids)}...")
+    logger.info("Fetched mailbox index total_emails=%s selected=%s", len(all_ids), len(recent_ids))
 
     emails = []
     for uid in recent_ids:
@@ -102,19 +104,23 @@ def fetch_last_n_emails(n=50):
     return emails
 
 
-# ── Claude analysis ────────────────────────────────────────────────────────────
+# ── OpenAI analysis ────────────────────────────────────────────────────────────
 
-def analyze_for_tasks(emails):
-    """First Claude call: produces the full markdown task report."""
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+def analyze_inbox(emails: list[dict]) -> dict:
+    """Single OpenAI call that returns summary markdown plus structured tasks and meetings."""
+    if OpenAI is None or not OPENAI_API_KEY:
+        raise RuntimeError("OpenAI is not configured. Install the openai package and set OPENAI_API_KEY.")
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     email_block = ""
     for i, e in enumerate(emails, 1):
         email_block += f"""
 --- Email {i} ---
+ID       : {e['id']}
 Subject  : {e['subject']}
 From     : {e['sender']}
 Date     : {e['received']}
+Importance: {e['importance']}
 Preview  : {e['preview']}
 """
 
@@ -124,72 +130,21 @@ Preview  : {e['preview']}
 
 Below are the last {len(emails)} emails from his inbox. Today is {today}.
 
-Review them carefully and produce:
-1. A **Task List** of all remaining/pending action items (replies needed, tickets to action, follow-ups, approvals, etc.)
-2. A **Summary** section grouping tasks by urgency: Urgent (within 24h), This Week, and Low Priority.
+Review them carefully and output ONLY a valid JSON object with exactly these top-level keys:
+- "summary_markdown": markdown string with a concise task summary grouped into Urgent, This Week, and Low Priority
+- "tasks": array of pending action items
+- "meetings": array of meetings, calls, prep sessions, or scheduled events
 
-For each task include: what needs to be done, who it involves, due date or urgency if mentioned.
-Ignore purely informational emails with no action required. Be concise and practical.
+Ignore purely informational emails with no action required.
 
-EMAILS:
-{email_block}
-"""
-
-    print("Sending emails to Claude for task analysis...")
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=3000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return message.content[0].text.strip()
-
-
-def _claude_json_call(prompt: str, label: str) -> list[dict]:
-    """Helper: sends a prompt to Claude and returns parsed JSON list."""
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    print(f"Extracting {label} from Claude...")
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    raw = message.content[0].text.strip()
-    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("` \n")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[!] Failed to parse {label} JSON: {e}")
-        return []
-
-
-def extract_tasks_json(markdown: str) -> list[dict]:
-    """Converts the markdown task report into a structured tasks JSON array."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"""Convert the following task list into a JSON array. Today is {today}.
-
-Output ONLY a valid JSON array — no explanation, no markdown fences, just the raw JSON.
-
-Each object must have exactly these keys:
+Each task object must have exactly these keys:
 - "title": short task title under 80 characters
-- "body": who it involves and what needs to be done (1-2 sentences)
-- "urgent": true if action needed within 24 hours, false otherwise
+- "action": a single imperative sentence describing the one thing Dilpreet should do now
+- "body": who it involves and the supporting context in 2-3 sentences max
+- "urgent": true if action is needed within 24 hours, false otherwise
 - "due_date": ISO 8601 string like "2026-03-27T00:00:00" if a specific date is mentioned, otherwise null
 
-TASK LIST:
-{markdown}
-"""
-    return _claude_json_call(prompt, "structured tasks")
-
-
-def extract_meetings_json(markdown: str) -> list[dict]:
-    """Extracts any meetings, calls, or prep sessions from the markdown task report."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"""From the task list below, extract only items that are meetings, calls, prep sessions, or scheduled events. Today is {today}.
-
-Output ONLY a valid JSON array — no explanation, no markdown fences, just raw JSON.
-If there are no meetings, output an empty array: []
-
-Each object must have exactly these keys:
+Each meeting object must have exactly these keys:
 - "title": meeting name under 80 characters
 - "date": ISO date string "YYYY-MM-DD" if a specific date is mentioned, otherwise null
 - "attendees": comma-separated names of who is involved
@@ -197,14 +152,45 @@ Each object must have exactly these keys:
 - "status": one of "Needs Scheduling", "Scheduled", or "Confirmed"
 - "link": full URL if a Zoom, Teams, WebEx, or any meeting join link is mentioned, otherwise null
 
-TASK LIST:
-{markdown}
+Requirements:
+- Return raw JSON only, with no markdown fences or explanation.
+- If there are no tasks, return "tasks": [].
+- If there are no meetings, return "meetings": [].
+- Keep summary_markdown concise and practical.
+
+EMAILS:
+{email_block}
 """
-    return _claude_json_call(prompt, "meetings")
+
+    logger.info("Sending emails to OpenAI for structured analysis email_count=%s", len(emails))
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        input=prompt,
+    )
+    raw = response.output_text.strip()
+    parsed = _parse_json_response(raw, "analysis payload")
+    if not isinstance(parsed, dict):
+        raise RuntimeError("OpenAI returned an invalid analysis payload.")
+
+    return {
+        "summary_markdown": str(parsed.get("summary_markdown", "")).strip(),
+        "tasks": _coerce_list_of_dicts(parsed.get("tasks")),
+        "meetings": _coerce_list_of_dicts(parsed.get("meetings")),
+    }
 
 
-def extract_markdown(response_text: str) -> str:
-    return response_text.strip()
+def _parse_json_response(raw: str, label: str):
+    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("` \n")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse OpenAI {label} JSON: {e}")
+
+
+def _coerce_list_of_dicts(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 # ── Markdown saving ────────────────────────────────────────────────────────────
@@ -229,20 +215,30 @@ def save_markdown(task_analysis: str, email_count: int) -> str:
 """
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"Saved: {filepath}")
+    logger.info("Saved markdown summary path=%s email_count=%s", filepath, email_count)
     return filepath
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main():
+    run_id = uuid.uuid4().hex[:8]
+    logger.info("Sync run started run_id=%s mailbox=%s", run_id, EMAIL_ADDRESS)
     emails = fetch_last_n_emails(25)
     if not emails:
-        print("No emails found.")
+        logger.info("No emails found run_id=%s", run_id)
     else:
-        raw_response = analyze_for_tasks(emails)
-        markdown     = extract_markdown(raw_response)
-        tasks        = extract_tasks_json(raw_response)
+        analysis = analyze_inbox(emails)
+        markdown = analysis["summary_markdown"]
+        tasks = analysis["tasks"]
+        meetings = analysis["meetings"]
+        logger.info(
+            "OpenAI analysis complete run_id=%s emails=%s tasks=%s meetings=%s",
+            run_id,
+            len(emails),
+            len(tasks),
+            len(meetings),
+        )
 
         path = save_markdown(markdown, len(emails))
 
@@ -251,29 +247,54 @@ if __name__ == "__main__":
         print("="*60)
         print(f"\nFile saved to: {path}")
 
-        meetings = extract_meetings_json(markdown)
+        state = load_state()
+        new_tasks, new_task_keys = filter_new_items(tasks, "tasks", state, task_key)
+        new_meetings, new_meeting_keys = filter_new_items(meetings, "meetings", state, meeting_key)
+
+        skipped_tasks = len(tasks) - len(new_tasks)
+        skipped_meetings = len(meetings) - len(new_meetings)
+        if skipped_tasks:
+            logger.info("Skipping previously synced tasks run_id=%s count=%s", run_id, skipped_tasks)
+        if skipped_meetings:
+            logger.info("Skipping previously synced meetings run_id=%s count=%s", run_id, skipped_meetings)
 
         if PUSH_TO_TODO:
-            from notion_tasks import push_tasks_to_notion, push_meetings_to_notion
+            from .notion_tasks import push_tasks_to_notion, push_meetings_to_notion
 
-            if tasks:
-                print(f"\nExtracted {len(tasks)} task(s) from Claude.")
+            if new_tasks:
+                logger.info("Pushing new tasks run_id=%s count=%s", run_id, len(new_tasks))
                 try:
-                    push_tasks_to_notion(tasks)
+                    push_tasks_to_notion(new_tasks)
+                    remember_items(state, "tasks", new_task_keys)
                 except Exception as e:
-                    print(f"[Notion] Could not push tasks: {e}")
+                    logger.exception("Could not push tasks run_id=%s error=%s", run_id, e)
 
-            if meetings:
-                print(f"Extracted {len(meetings)} meeting(s) from Claude.")
+            if new_meetings:
+                logger.info("Pushing new meetings run_id=%s count=%s", run_id, len(new_meetings))
                 try:
-                    push_meetings_to_notion(meetings)
+                    push_meetings_to_notion(new_meetings)
+                    remember_items(state, "meetings", new_meeting_keys)
                 except Exception as e:
-                    print(f"[Notion] Could not push meetings: {e}")
+                    logger.exception("Could not push meetings run_id=%s error=%s", run_id, e)
         else:
-            print("[Notion] PUSH_TO_TODO is disabled. Set PUSH_TO_TODO=true in .env to enable.")
+            logger.info("Notion sync disabled run_id=%s", run_id)
 
         try:
-            from telegram_notify import notify
-            notify(tasks, meetings)
+            from .telegram_notify import notify
+            notify(new_tasks, new_meetings)
         except Exception as e:
-            print(f"[Telegram] Could not send notification: {e}")
+            logger.exception("Could not send Telegram notification run_id=%s error=%s", run_id, e)
+
+        if new_task_keys or new_meeting_keys:
+            save_state(state)
+            logger.info(
+                "Sync state saved run_id=%s task_keys=%s meeting_keys=%s",
+                run_id,
+                len(new_task_keys),
+                len(new_meeting_keys),
+            )
+        logger.info("Sync run completed run_id=%s", run_id)
+
+
+if __name__ == "__main__":
+    main()
